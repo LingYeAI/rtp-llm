@@ -55,6 +55,8 @@ else:
 
     # MoE strategies
     from rtp_llm.models_py.modules.factory.fused_moe.impl.cuda.strategy import (
+        CudaFp4EpLowLatencyStrategy,
+        CudaFp4EpNormalStrategy,
         CudaFp8PerBlockEpLowLatencyStrategy,
         CudaFp8PerBlockEpNormalStrategy,
         CudaFp8PerBlockNoDPStrategy,
@@ -65,6 +67,10 @@ else:
     )
 
     registry = StrategyRegistry()
+    # Register FP4 strategies with higher priority (registered first)
+    registry.register(CudaFp4EpLowLatencyStrategy())
+    registry.register(CudaFp4EpNormalStrategy())
+    # Register FP8 strategies
     registry.register(CudaFp8PerTensorEpLowLatencyStrategy())
     registry.register(CudaFp8PerTensorEpNormalStrategy())
     registry.register(CudaFp8PerBlockEpLowLatencyStrategy())

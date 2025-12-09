@@ -8,6 +8,11 @@ from rtp_llm.models_py.kernels.cuda.fp8_kernel import (
     scaled_fp8_per_token_quant,
 )
 
+try:
+    from sgl_kernel.gemm import scaled_fp4_grouped_quant
+except ImportError:
+    scaled_fp4_grouped_quant = None
+
 
 def resize_cache(x: torch.Tensor, v: tuple[int, ...]) -> torch.Tensor:
     """
@@ -51,21 +56,88 @@ def _fp8_quantize(
     return A_q, A_scale
 
 
+def _fp4_quantize(
+    A: torch.Tensor,
+    A_scale: Optional[torch.Tensor],
+    per_act_token: bool,
+    block_shape: Optional[list[int]] = None,
+    masked_m: Optional[torch.Tensor] = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """
+    Perform FP4 quantization on the inputs (NvFP4 only).
+    
+    This function uses scaled_fp4_grouped_quant for grouped quantization when
+    expert-organized data and masked_m are available. Otherwise, returns original
+    input for kernel-internal quantization.
+    
+    Args:
+        A: Input tensor to quantize, shape [num_experts, m, k] for grouped quant
+        A_scale: Optional scale tensor, shape [num_experts] for per-expert scale
+        per_act_token: Whether to use per-token quantization (not used for FP4)
+        block_shape: Block shape for quantization (should be [16, 16] for FP4)
+        masked_m: Optional mask tensor for grouped quantization, shape [num_experts, m]
+        
+    Returns:
+        Quantized tensor and scale tensor
+    """
+    if scaled_fp4_grouped_quant is None:
+        raise ImportError("scaled_fp4_grouped_quant is not available")
+    
+    # scaled_fp4_grouped_quant requires:
+    # - Input tensor: [num_experts, m, k] for bf16
+    # - input_global_scale: [num_experts] per-expert scale (float32)
+    # - masked_m: [num_experts, m] boolean mask
+    
+    if A.ndim == 3 and masked_m is not None:
+        # Grouped quantization path (for expert-organized data)
+        # A should be [num_experts, m, k]
+        num_experts, m, k = A.shape
+        if A_scale is None:
+            # Create per-expert scale tensor
+            input_global_scale = torch.ones(
+                (num_experts,), dtype=torch.float32, device=A.device
+            )
+        else:
+            # A_scale should be [num_experts] for per-expert scale
+            input_global_scale = A_scale.to(torch.float32)
+            if input_global_scale.ndim == 0:
+                input_global_scale = input_global_scale.unsqueeze(0).expand(num_experts)
+            elif input_global_scale.shape[0] != num_experts:
+                # If shape doesn't match, create default scale
+                input_global_scale = torch.ones(
+                    (num_experts,), dtype=torch.float32, device=A.device
+                )
+        
+        A_q, A_q_sf = scaled_fp4_grouped_quant(
+            A,
+            input_global_scale,
+            masked_m,
+        )
+        return A_q, A_q_sf
+    else:
+        # For non-grouped quantization or when masked_m is not available,
+        # return original input - quantization will be handled in the kernel
+        return A, A_scale
+
+
 def moe_kernel_quantize_input(
     A: torch.Tensor,
     A_scale: Optional[torch.Tensor],
     quant_dtype: Union[None, torch.dtype, str],
     per_act_token_quant: bool,
     block_shape: Optional[list[int]] = None,
+    masked_m: Optional[torch.Tensor] = None,
 ) -> tuple[torch.Tensor, Optional[torch.Tensor]]:
     if quant_dtype == torch.float8_e4m3fn:
         return _fp8_quantize(A, A_scale, per_act_token_quant, block_shape)
     elif quant_dtype == torch.int8:
         raise NotImplementedError("int8 not supported yet")
     elif quant_dtype == torch.uint8:  # nvfp4
-        raise NotImplementedError("nvfp4 not supported yet")
+        # For NvFP4, use _fp4_quantize
+        return _fp4_quantize(A, A_scale, per_act_token_quant, block_shape, masked_m)
     elif quant_dtype == "mxfp4":
-        raise NotImplementedError("mxfp4 not supported yet")
+        # For MxFP4, maintain original behavior (quantization handled in kernel)
+        return A, None
     else:
         return A, A_scale
 

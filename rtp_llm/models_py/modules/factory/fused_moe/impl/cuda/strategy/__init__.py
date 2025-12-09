@@ -1,5 +1,9 @@
 """CUDA MOE strategies"""
 
+from .fp4_per_block import (
+    CudaFp4EpLowLatencyStrategy,
+    CudaFp4EpNormalStrategy,
+)
 from .fp8_per_block import (
     CudaFp8PerBlockEpLowLatencyStrategy,
     CudaFp8PerBlockEpNormalStrategy,
@@ -15,6 +19,9 @@ from .no_quant import CudaNoQuantEpLowLatencyStrategy
 __all__ = [
     # No quantization
     "CudaNoQuantEpLowLatencyStrategy",
+    # FP4 PerBlock
+    "CudaFp4EpLowLatencyStrategy",
+    "CudaFp4EpNormalStrategy",
     # FP8 PerBlock
     "CudaFp8PerBlockNoDPStrategy",
     "CudaFp8PerBlockEpLowLatencyStrategy",
