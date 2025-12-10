@@ -180,7 +180,7 @@ def _generate_payload_and_weights(
             (num_actual_tokens, K), device="cuda", dtype=torch.bfloat16
         )
         expert_num_tokens[local_expert_id] = num_actual_tokens
-    
+    print(expert_num_tokens)
     payload = ExpertForwardPayload(
         expert_x=expert_x,
         expert_x_origin_dtype=torch.bfloat16,
