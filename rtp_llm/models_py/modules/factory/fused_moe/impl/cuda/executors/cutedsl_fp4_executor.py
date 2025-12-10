@@ -74,6 +74,9 @@ class CutedslFp4Executor(FusedMoeExpertExecutor):
         self._w1_alpha = self._weights.get("partial_moe_weights.intermediate_weight.alpha", None)
         self._w2_alpha = self._weights.get("partial_moe_weights.intermediate_weight2.alpha", None)
 
+        self.input_global_scale = self._weights.get(W.moe_w1_input_sr, None)
+        self.a2_global_scale = self._weights.get(W.moe_w2_input_sr, None)
+
         assert self._w1 is not None and self._w2 is not None, "FP4 MoE weights w1 and w2 must be provided"
         assert self._w1_blockscale is not None and self._w2_blockscale is not None, "FP4 MoE blockscale weights must be provided"
         assert self._w1_alpha is not None and self._w2_alpha is not None, "FP4 MoE alpha weights must be provided"
@@ -156,31 +159,27 @@ class CutedslFp4Executor(FusedMoeExpertExecutor):
         # Create masked_m tensor from expert_num_tokens
         masked_m = self._create_masked_m(expert_num_tokens, M, expert_x.device)
 
-        # Prepare input global scale (per expert)
-        input_global_scale = torch.ones(
-            (E,), dtype=torch.float32, device=expert_x.device
-        )
-        a2_global_scale = input_global_scale.clone()
+        # TODO: remove this, use the input_global_scale from the weights
+        # input_global_scale = torch.ones(
+        #     (E,), dtype=torch.float32, device=expert_x.device
+        # )
+        # a2_global_scale = input_global_scale.clone()
 
-        # Prepare hidden_states tuple
-        # If expert_x_scale is provided, it means input is already quantized
+
         if payload.expert_x_scale is not None:
-            # Input is already quantized as FP4
-            # expert_x should be [E, M, K//2] uint8, expert_x_scale should be [E, M, K//16] float8_e4m3fn
             hidden_states = (expert_x, payload.expert_x_scale)
         else:
-            # Input is bf16, will be quantized inside the kernel
             hidden_states = (expert_x, None)
 
         # Call the CuteDSL FP4 MoE kernel
         output = flashinfer_cutedsl_moe_masked(
             hidden_states=hidden_states,
-            input_global_scale=input_global_scale,
+            input_global_scale=self.input_global_scale,
             w1=self._w1,
             w1_blockscale=self._w1_blockscale,
             w1_alpha=self._w1_alpha,
             w2=self._w2,
-            a2_global_scale=a2_global_scale,
+            a2_global_scale=self.a2_global_scale,
             w2_blockscale=self._w2_blockscale,
             w2_alpha=self._w2_alpha,
             masked_m=masked_m,
