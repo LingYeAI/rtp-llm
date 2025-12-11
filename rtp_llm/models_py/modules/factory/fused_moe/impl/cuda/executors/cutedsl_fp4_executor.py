@@ -67,15 +67,15 @@ class CutedslFp4Executor(FusedMoeExpertExecutor):
         # blockscale and alpha are additional quantization parameters
         self._w1 = self._weights.get(W.moe_w1, None)
         self._w2 = self._weights.get(W.moe_w2, None)
-        self._w1_blockscale = self._weights.get(W.moe_s1, None)
-        self._w2_blockscale = self._weights.get(W.moe_s2, None)
+        self._w1_blockscale = self._weights.get(W.moe_w1_scale, None)
+        self._w2_blockscale = self._weights.get(W.moe_w2_scale, None)
         # For FP4, alpha weights may be stored with specific keys
         # These should be mapped by the weight loader to standard keys
-        self._w1_alpha = self._weights.get("partial_moe_weights.intermediate_weight.alpha", None)
-        self._w2_alpha = self._weights.get("partial_moe_weights.intermediate_weight2.alpha", None)
+        self._w1_alpha = self._weights.get(W.moe_w1_scale2, None)
+        self._w2_alpha = self._weights.get(W.moe_w2_scale2, None)
 
-        self.input_global_scale = self._weights.get(W.moe_w1_input_sr, None)
-        self.a2_global_scale = self._weights.get(W.moe_w2_input_sr, None)
+        self.input_global_scale = self._weights.get(W.input_global_scale, None)
+        self.a2_global_scale = self._weights.get(W.a2_global_scale, None)
 
         assert self._w1 is not None and self._w2 is not None, "FP4 MoE weights w1 and w2 must be provided"
         assert self._w1_blockscale is not None and self._w2_blockscale is not None, "FP4 MoE blockscale weights must be provided"
@@ -146,13 +146,15 @@ class CutedslFp4Executor(FusedMoeExpertExecutor):
         assert expert_x.ndim == 3
         E, M, K = expert_x.size()
 
-        _, N, _ = self._w1.size()
-        assert N % 2 == 0
+        # For FP4, weights are packed: w1 is [E, 2*N, K//2], w2 is [E, K, N//2]
+        # where N is intermediate_size
         assert self._w1.size(0) == E
-        assert self._w1.size(2) == K
+        assert self._w1.size(1) % 2 == 0  # w1 should be 2*N
+        N = self._w1.size(1) // 2  # intermediate_size
+        assert self._w1.size(2) == K // 2, f"w1 last dim should be K//2={K//2}, got {self._w1.size(2)}"
         assert self._w2.size(0) == E
-        assert self._w2.size(1) == K
-        assert self._w2.size(2) == N // 2
+        assert self._w2.size(1) == K, f"w2 second dim should be K={K}, got {self._w2.size(1)}"
+        assert self._w2.size(2) == N // 2, f"w2 last dim should be N//2={N//2}, got {self._w2.size(2)}"
 
         assert activation == "SiGLU", f"Only SiGLU activation is supported, got {activation}"
 

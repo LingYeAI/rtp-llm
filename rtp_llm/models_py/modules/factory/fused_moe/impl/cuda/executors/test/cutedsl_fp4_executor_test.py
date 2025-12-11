@@ -111,25 +111,35 @@ def _quantize_weight_to_fp4(
                 sf_vec_size=16,
                 sf_use_ue8m0=False,
             )
-            # w_scale is float8_e4m3fn, reshape to blockscale format
-            # w_scale shape should be [m//16, n//16] for block quantization
+
+            w_scale_fp8 = w_scale.view(torch.float8_e4m3fn)
             quantized_weights.append(w_q)
-            blockscales.append(w_scale)
+            blockscales.append(w_scale_fp8)
             
-            # Compute alpha from global scale
-            # Alpha is used for scaling in the kernel, typically 1.0 / (global_scale * quantization_constants)
-            # For simplicity in testing, we use a value based on global scale
             if gs.ndim == 0:
                 gs_val = gs.item() if hasattr(gs, 'item') else float(gs)
             else:
                 gs_val = gs.item() if hasattr(gs, 'item') else float(gs)
             # Simplified alpha calculation for testing
-            # In practice, alpha should match the quantization scheme used
             alpha_val = 1.0 / (gs_val * FLOAT8_E4M3_MAX * FLOAT4_E2M1_MAX) if gs_val > 0 else 1.0
             alphas.append(alpha_val)
         
         quantized_weight = torch.stack(quantized_weights, dim=0)  # [num_experts, m, n//2]
-        blockscale = torch.stack(blockscales, dim=0)  # [num_experts, m//16, n//16]
+        num_experts = len(blockscales)
+        first_scale_shape = blockscales[0].shape
+        blockscale = torch.empty(
+            (num_experts, *first_scale_shape), 
+            device=device, 
+            dtype=torch.float8_e4m3fn
+        )
+        # Copy each blockscale into pre-allocated tensor
+        for i, bs in enumerate(blockscales):
+            # Ensure dtype is correct before copying
+            if bs.dtype != torch.float8_e4m3fn:
+                bs = bs.view(torch.float8_e4m3fn)
+            blockscale[i] = bs
+        # Reshape to match expected format similar to bench_moe_fp4.py if needed
+        # For now, use the shape from fp4_quantize output
         alpha = torch.tensor(alphas, device=device, dtype=torch.float32)
         
         return quantized_weight, blockscale, alpha
@@ -192,11 +202,14 @@ def _generate_payload_and_weights(
     )
     
     # generate bf16 weights first
+    # w1 shape: [num_experts, 2 * intermediate_size, hidden_size]
+    # w2 shape: [num_experts, hidden_size, intermediate_size]
+    intermediate_size = MOE_INTERMEDIATE_SIZE
     w1_bf16 = torch.randn(
-        (num_local_experts, N, K), device="cuda", dtype=torch.bfloat16
+        (num_local_experts, 2 * intermediate_size, K), device="cuda", dtype=torch.bfloat16
     )
     w2_bf16 = torch.randn(
-        (num_local_experts, K, N // 2), device="cuda", dtype=torch.bfloat16
+        (num_local_experts, K, intermediate_size), device="cuda", dtype=torch.bfloat16
     )
     
     # Quantize to FP4
@@ -209,13 +222,23 @@ def _generate_payload_and_weights(
     w1_quantized, w1_blockscale, w1_alpha = _quantize_weight_to_fp4(w1_bf16, w1_global_scale)
     w2_quantized, w2_blockscale, w2_alpha = _quantize_weight_to_fp4(w2_bf16, w2_global_scale)
     
+    # Create input global scales (per expert)
+    input_global_scale = torch.ones(
+        (num_local_experts,), dtype=torch.float32, device="cuda"
+    )
+    a2_global_scale = torch.ones(
+        (num_local_experts,), dtype=torch.float32, device="cuda"
+    )
+    
     weights = {
-        W.moe_w1: w1_quantized,  # uint8, shape [num_experts, N, K//2]
-        W.moe_w2: w2_quantized,  # uint8, shape [num_experts, K, N//2]
-        W.moe_s1: w1_blockscale,  # float8_e4m3fn, blockscale
-        W.moe_s2: w2_blockscale,  # float8_e4m3fn, blockscale
-        "partial_moe_weights.intermediate_weight.alpha": w1_alpha,  # float32
-        "partial_moe_weights.intermediate_weight2.alpha": w2_alpha,  # float32
+        W.moe_w1: w1_quantized,  # uint8, shape [num_experts, 2*intermediate_size, K//2]
+        W.moe_w2: w2_quantized,  # uint8, shape [num_experts, K, intermediate_size//2]
+        W.moe_w1_scale: w1_blockscale,  # float8_e4m3fn, blockscale
+        W.moe_w2_scale: w2_blockscale,  # float8_e4m3fn, blockscale
+        W.moe_w1_scale2: w1_alpha,  # float32
+        W.moe_w2_scale2: w2_alpha,  # float32
+        W.input_global_scale: input_global_scale,  # float32, shape [num_experts]
+        W.a2_global_scale: a2_global_scale,  # float32, shape [num_experts]
     }
     return payload, weights, w1_bf16, w2_bf16
 
@@ -235,18 +258,19 @@ def _generate_ref_output(
     ref_output = torch.zeros(
         (num_local_experts, M, K), device="cuda", dtype=torch.bfloat16
     )
+    intermediate_size = MOE_INTERMEDIATE_SIZE
     for local_expert_id in range(num_local_experts):
         num_actual_tokens = expert_num_tokens[local_expert_id].item()
         expert_x_local = expert_x[local_expert_id, :num_actual_tokens, :]
-        w1_local = w1_bf16[local_expert_id]
-        w2_local = w2_bf16[local_expert_id]
-        workspace1 = expert_x_local @ w1_local.transpose(0, 1)
-        gate = workspace1[..., N // 2 :].to(torch.float32)
-        value = workspace1[..., : N // 2].to(torch.float32)
+        w1_local = w1_bf16[local_expert_id]  # [2 * intermediate_size, K]
+        w2_local = w2_bf16[local_expert_id]  # [K, intermediate_size]
+        workspace1 = expert_x_local @ w1_local.transpose(0, 1)  # [num_tokens, 2 * intermediate_size]
+        gate = workspace1[..., intermediate_size:].to(torch.float32)  # [num_tokens, intermediate_size]
+        value = workspace1[..., :intermediate_size].to(torch.float32)  # [num_tokens, intermediate_size]
         gate = gate * (1.0 / (1.0 + torch.exp(-gate)))  # SiGLU
-        workspace2 = (gate * value).to(torch.bfloat16)
+        workspace2 = (gate * value).to(torch.bfloat16)  # [num_tokens, intermediate_size]
         ref_output[local_expert_id, :num_actual_tokens, :] = (
-            workspace2 @ w2_local.transpose(0, 1)
+            workspace2 @ w2_local.transpose(0, 1)  # [num_tokens, K]
         )
     return ref_output
 
