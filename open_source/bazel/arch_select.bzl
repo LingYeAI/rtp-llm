@@ -19,15 +19,15 @@ def copy_all_so():
     copy_so("//rtp_llm/cpp/cuda/cutlass:moe")
     copy_so("//rtp_llm/cpp/cuda/cutlass:moe_sm90")
     copy_so("//rtp_llm/cpp/cuda/cutlass:int8_gemm")
-    copy_so("@flashinfer_cpp//:flashinfer_single_prefill")
-    copy_so("@flashinfer_cpp//:flashinfer_single_decode")
-    copy_so("@flashinfer_cpp//:flashinfer_batch_paged_prefill")
-    copy_so("@flashinfer_cpp//:flashinfer_batch_paged_decode")
-    copy_so("@flashinfer_cpp//:flashinfer_batch_ragged_prefill")
+    copy_so("@flashinfer//:flashinfer_single_prefill")
+    copy_so("@flashinfer//:flashinfer_single_decode")
+    copy_so("@flashinfer//:flashinfer_batch_paged_prefill")
+    copy_so("@flashinfer//:flashinfer_batch_paged_decode")
+    copy_so("@flashinfer//:flashinfer_batch_ragged_prefill")
     # num of so
     copy_so_inst("//rtp_llm/cpp/cuda/deep_gemm:deepgemm_dpsk", dpsk_gemm_so_num)
     copy_so_inst("//rtp_llm/cpp/cuda/deep_gemm:deepgemm_qwen", qwen_gemm_so_num)
-    copy_so("@flashinfer_cpp//:flashinfer_sm90")
+    copy_so("@flashinfer//:flashinfer_sm90")
     copy_so("@deep_ep//:deep_ep_cu")
 
 def requirement(names):
@@ -65,7 +65,7 @@ def subscribe_deps():
 def whl_deps():
     return select({
         "@//:using_cuda12": ["torch==2.6.0+cu126"],
-        "@//:using_rocm": ["pyrsmi==0.2.0", "amdsmi@https://sinian-metrics-platform.oss-cn-hangzhou.aliyuncs.com/kis%2FAMD%2Famd_smi%2Fali%2Famd_smi.tar", "aiter@https://sinian-metrics-platform.oss-cn-hangzhou.aliyuncs.com/kis/AMD/RTP/aiter-0.1.6%2Bgit.329d07ba.date.202511061023-py3-none-any.whl"],
+        "@//:using_rocm": ["pyrsmi", "amdsmi@https://sinian-metrics-platform.oss-cn-hangzhou.aliyuncs.com/kis%2FAMD%2Famd_smi%2Fali%2Famd_smi.tar", "aiter@https://sinian-metrics-platform.oss-cn-hangzhou.aliyuncs.com/kis/AMD/RTP/aiter-0.1.5%2Bgit.007fe7aa.date.202510272053-py3-none-any.whl"],
         "//conditions:default": ["torch==2.1.2"],
     })
 
@@ -73,7 +73,7 @@ def platform_deps():
     return select({
         "@//:using_arm": [],
         "@//:using_cuda12_arm": [],
-        "@//:using_rocm": ["pyyaml==6.0.2","decord==0.6.0"],
+        "@//:using_rocm": ["pyyaml","decord==0.6.0"],
         "//conditions:default": ["decord==0.6.0"],
     })
 
@@ -121,7 +121,7 @@ def fa_deps():
 def flashinfer_deps():
     native.alias(
         name = "flashinfer",
-        actual = "@flashinfer_cpp//:flashinfer"
+        actual = "@flashinfer//:flashinfer"
     )
 
 def flashmla_deps():
@@ -142,12 +142,12 @@ def deep_ep_py_deps():
         actual = "//rtp_llm:empty_target",
     )
 
-def deep_gemm_deps():
-    native.alias(
-        name = "deep_gemm",
-        actual = "@deep_gemm_ext//:deep_gemm",
-        visibility = ["//visibility:public"],
-    )
+# def deep_gemm_deps():
+#     native.alias(
+#         name = "deep_gemm",
+#         actual = "@deep_gemm_ext//:deep_gemm",
+#         visibility = ["//visibility:public"],
+#     )
 
 def kernel_so_deps():
     return select({
