@@ -3,7 +3,7 @@ from typing import Any, Dict, Optional
 import torch
 
 from rtp_llm.config.gpt_init_model_parameters import GptInitModelParameters
-from rtp_llm.models_py.kernels.cuda.fp4_kernel.flashinfer_cutedsl_moe import (
+from rtp_llm.models_py.kernels.cuda.fp4_kernel import (
     flashinfer_cutedsl_moe_masked,
 )
 from rtp_llm.models_py.modules.factory.fused_moe.defs.fused_moe import (
