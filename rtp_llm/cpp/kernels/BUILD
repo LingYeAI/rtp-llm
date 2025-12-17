@@ -99,6 +99,25 @@ cc_library(
 )
 
 cc_library(
+    name = "scaled_fp4_quant",
+    srcs = [
+        "scaled_fp4_quant.cu",
+    ],
+    hdrs = [
+        "scaled_fp4_quant.h",
+    ],
+    deps = [
+        "//rtp_llm/cpp/cuda/cutlass:fp4_gemm_cu",
+        "//rtp_llm/cpp/cuda:cuda_host_utils",
+        ":cuda_utils_common",
+        "@local_config_cuda//cuda:cuda_headers",
+        "@local_config_cuda//cuda:cudart",
+    ] + torch_deps(),
+    copts = cuda_copts(),
+    visibility = ["//visibility:public"],
+)
+
+cc_library(
     name = "cuda_quantization",
     srcs = [
         "per_token_group_quant_8bit.cu",
