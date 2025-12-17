@@ -113,7 +113,9 @@ cc_library(
         "@local_config_cuda//cuda:cuda_headers",
         "@local_config_cuda//cuda:cudart",
     ] + torch_deps(),
-    copts = cuda_copts(),
+    copts = sm100_cuda_copts + [
+        "-DCUTLASS_ARCH_MMA_SM100_SUPPORTED",
+    ],
     visibility = ["//visibility:public"],
 )
 
